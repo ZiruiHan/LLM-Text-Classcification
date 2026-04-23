@@ -1,8 +1,7 @@
 # Adaptation-Need Prediction Under Domain Shift
 
-This repository is a research prototype for a fellowship application. The goal is to study whether we can predict, from unlabeled target-domain data, how much performance drops under domain shift and how much labeled target-domain data is needed for a smaller adapted model to catch up.
+ The goal is to study whether we can predict, from unlabeled target-domain data, how much performance drops under domain shift and how much labeled target-domain data is needed for a smaller adapted model to catch up.
 
-The codebase is intentionally small. It is built around [`benchmark_runner.py`](/Users/ziruihan/Desktop/Anote-Text-Classcification/benchmark_runner.py), which remains the main entry point for running source-to-target adaptation benchmarks.
 
 **Project Goal**
 
@@ -103,7 +102,7 @@ This path is intentionally minimal and should be treated as an extension point, 
 
 **Current Scope**
 
-This repo is meant to look like a serious starter prototype, not finished paper code. It does not yet include:
+This repo is meant to look like a starter prototype, not finished paper code. It does not yet include:
 
 - a meta-predictor that forecasts performance drop or target budget from shift features
 - repeated-seed confidence intervals
