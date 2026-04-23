@@ -1,0 +1,3 @@
+{"text": "Premise: The treatment lowered blood pressure in most patients. Hypothesis: The therapy reduced hypertension markers.", "label": "entailment"}
+{"text": "Premise: Imaging found no spinal abnormalities. Hypothesis: The scan revealed spinal damage.", "label": "contradiction"}
+{"text": "Premise: The study followed patients for six months after surgery. Hypothesis: Long-term outcomes might need further observation.", "label": "neutral"}

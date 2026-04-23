@@ -1,0 +1,48 @@
+{
+  "task_name": "nli_demo",
+  "label_names": ["entailment", "neutral", "contradiction"],
+  "output_dir": "outputs/nli_demo",
+  "seed": 7,
+  "cost_model": {
+    "llm_cost_per_1k_examples": 6.0,
+    "annotation_cost_per_example": 0.45,
+    "finetune_cost_per_run": 18.0,
+    "deployment_examples_per_month": 5000,
+    "deployment_months": 6
+  },
+  "domains": {
+    "general": {
+      "train": "data/nli_general_train.jsonl",
+      "test": "data/nli_general_test.jsonl"
+    },
+    "biomed": {
+      "train": "data/nli_biomed_train.jsonl",
+      "test": "data/nli_biomed_test.jsonl"
+    }
+  },
+  "experiments": [
+    {
+      "source_domain": "general",
+      "target_domain": "biomed",
+      "target_budgets": [2, 4, 6, 8],
+      "models": [
+        {
+          "name": "bart_mnli",
+          "strategy": "zero_shot_nli",
+          "model_id": "facebook/bart-large-mnli",
+          "batch_size": 4,
+          "hypothesis_template": "The relation is {}."
+        },
+        {
+          "name": "bert_base",
+          "strategy": "finetune_encoder",
+          "model_id": "bert-base-uncased",
+          "batch_size": 4,
+          "num_train_epochs": 1,
+          "learning_rate": 2e-5,
+          "max_length": 192
+        }
+      ]
+    }
+  ]
+}

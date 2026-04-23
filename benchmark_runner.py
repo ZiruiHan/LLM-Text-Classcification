@@ -106,37 +106,22 @@ Notes
 from __future__ import annotations
 
 import argparse
-import csv
 import json
-import math
-import random
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
-import torch
-from sklearn.metrics import accuracy_score, f1_score
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    Trainer,
-    TrainingArguments,
-    pipeline,
-)
-from datasets import Dataset
+from src.budget_analysis import summarize_budget_to_match
+from src.cost_model import build_cost_config, estimate_strategy_costs
+from src.data_utils import ensure_dir, read_examples, sample_budget, save_rows_to_csv, set_seed, write_json
+from src.domain_shift import compute_domain_shift_summary
+from src.metrics import compute_classification_metrics
+from src.model_backends import ClassifierBackend, build_backend
 
 
 # ---------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------
-
-@dataclass
-class Example:
-    text: str
-    label: str
-
 
 @dataclass
 class DomainFiles:
@@ -175,44 +160,6 @@ class BenchmarkConfig:
     seed: int = 42
 
 
-# ---------------------------------------------------------------------
-# I/O utilities
-# ---------------------------------------------------------------------
-
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def read_examples(path: str) -> List[Example]:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Dataset file not found: {p}")
-
-    if p.suffix.lower() == ".jsonl":
-        records: List[Example] = []
-        with p.open("r", encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                if not line.strip():
-                    continue
-                obj = json.loads(line)
-                if "text" not in obj or "label" not in obj:
-                    raise ValueError(f"Missing 'text' or 'label' in {p} at line {line_no}")
-                records.append(Example(text=str(obj["text"]), label=str(obj["label"])))
-        return records
-
-    if p.suffix.lower() == ".csv":
-        records = []
-        with p.open("r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if "text" not in row or "label" not in row:
-                    raise ValueError(f"CSV must contain 'text' and 'label' columns: {p}")
-                records.append(Example(text=str(row["text"]), label=str(row["label"])))
-        return records
-
-    raise ValueError(f"Unsupported file type for {p}. Use .jsonl or .csv")
-
-
 def load_config(path: str) -> BenchmarkConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -240,60 +187,12 @@ def load_config(path: str) -> BenchmarkConfig:
     )
 
 
-def save_rows_to_csv(rows: List[dict], path: Path) -> None:
-    ensure_dir(path.parent)
-    if not rows:
-        return
-    fieldnames = sorted({key for row in rows for key in row.keys()})
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-# ---------------------------------------------------------------------
-# Data helpers
-# ---------------------------------------------------------------------
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def sample_budget(records: List[Example], budget: int, seed: int) -> List[Example]:
-    if budget >= len(records):
-        return list(records)
-    rng = random.Random(seed)
-    return rng.sample(records, budget)
-
-
-def label_to_id_map(label_names: Sequence[str]) -> Dict[str, int]:
-    return {label: i for i, label in enumerate(label_names)}
-
-
-def examples_to_hf_dataset(records: List[Example], label_names: Sequence[str]) -> Dataset:
-    label2id = label_to_id_map(label_names)
-    payload = {
-        "text": [r.text for r in records],
-        "label": [label2id[r.label] for r in records],
-    }
-    return Dataset.from_dict(payload)
-
-
 # ---------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------
 
 def compute_metrics(true_labels: Sequence[str], pred_labels: Sequence[str], label_names: Sequence[str]) -> Dict[str, float]:
-    acc = accuracy_score(true_labels, pred_labels)
-    macro_f1 = f1_score(true_labels, pred_labels, labels=list(label_names), average="macro", zero_division=0)
-    return {
-        "accuracy": float(acc),
-        "macro_f1": float(macro_f1),
-    }
+    return compute_classification_metrics(true_labels, pred_labels, label_names)
 
 
 def estimate_budget_to_reach_threshold(budget_rows: List[dict], threshold: float) -> Optional[int]:
@@ -309,187 +208,13 @@ def estimate_budget_to_reach_threshold(budget_rows: List[dict], threshold: float
     return None
 
 
-# ---------------------------------------------------------------------
-# Backend interfaces
-# ---------------------------------------------------------------------
-
-class ClassifierBackend(ABC):
-    def __init__(self, model_spec: ModelSpec, label_names: Sequence[str]) -> None:
-        self.model_spec = model_spec
-        self.label_names = list(label_names)
-
-    @abstractmethod
-    def fit(self, train_records: List[Example], eval_records: Optional[List[Example]] = None) -> None:
-        pass
-
-    @abstractmethod
-    def predict(self, texts: List[str]) -> List[str]:
-        pass
-
-
-class ZeroShotNLIBackend(ClassifierBackend):
-    """
-    A real zero-shot baseline using the Hugging Face zero-shot-classification pipeline.
-    This is not a generative LLM, but it is a strong and practical zero-shot benchmark.
-    """
-    def __init__(self, model_spec: ModelSpec, label_names: Sequence[str]) -> None:
-        super().__init__(model_spec, label_names)
-        device = 0 if torch.cuda.is_available() else -1
-        self.pipe = pipeline(
-            "zero-shot-classification",
-            model=model_spec.model_id,
-            device=device,
-        )
-
-    def fit(self, train_records: List[Example], eval_records: Optional[List[Example]] = None) -> None:
-        # True zero-shot: no fitting.
-        return
-
-    def predict(self, texts: List[str]) -> List[str]:
-        preds: List[str] = []
-        bs = max(1, self.model_spec.batch_size)
-        for start in range(0, len(texts), bs):
-            batch = texts[start:start + bs]
-            outputs = self.pipe(
-                batch,
-                candidate_labels=self.label_names,
-                hypothesis_template=self.model_spec.hypothesis_template,
-                multi_label=False,
-            )
-            # HF returns either a dict or a list of dicts depending on input size.
-            if isinstance(outputs, dict):
-                outputs = [outputs]
-            for out in outputs:
-                preds.append(out["labels"][0])
-        return preds
-
-
-class SequenceClassifierBackend(ClassifierBackend):
-    """
-    Fine-tuning backend for both BERT-style encoders and small transformer models.
-    The difference between "finetune_encoder" and "finetune_slm" is primarily the model_id.
-    """
-    def __init__(self, model_spec: ModelSpec, label_names: Sequence[str], output_subdir: Path) -> None:
-        super().__init__(model_spec, label_names)
-        self.output_subdir = output_subdir
-        self.label2id = label_to_id_map(label_names)
-        self.id2label = {v: k for k, v in self.label2id.items()}
-        self.tokenizer = AutoTokenizer.from_pretrained(model_spec.model_id)
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_spec.model_id,
-            num_labels=len(label_names),
-            label2id=self.label2id,
-            id2label=self.id2label,
-        )
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
-
-    def _tokenize_dataset(self, ds: Dataset) -> Dataset:
-        def tokenize_fn(batch: dict) -> dict:
-            return self.tokenizer(
-                batch["text"],
-                truncation=True,
-                padding="max_length",
-                max_length=self.model_spec.max_length,
-            )
-        return ds.map(tokenize_fn, batched=True)
-
-    def fit(self, train_records: List[Example], eval_records: Optional[List[Example]] = None) -> None:
-        train_ds = examples_to_hf_dataset(train_records, self.label_names)
-        train_ds = self._tokenize_dataset(train_ds)
-
-        eval_ds = None
-        if eval_records:
-            eval_ds = examples_to_hf_dataset(eval_records, self.label_names)
-            eval_ds = self._tokenize_dataset(eval_ds)
-
-        ensure_dir(self.output_subdir)
-        training_args = TrainingArguments(
-            output_dir=str(self.output_subdir),
-            overwrite_output_dir=True,
-            per_device_train_batch_size=self.model_spec.batch_size,
-            per_device_eval_batch_size=self.model_spec.batch_size,
-            num_train_epochs=self.model_spec.num_train_epochs,
-            learning_rate=self.model_spec.learning_rate,
-            weight_decay=self.model_spec.weight_decay,
-            logging_steps=10,
-            save_strategy="no",
-            evaluation_strategy="no" if eval_ds is None else "epoch",
-            report_to=[],
-        )
-
-        trainer = Trainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=train_ds,
-            eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
-        )
-        trainer.train()
-
-    def predict(self, texts: List[str]) -> List[str]:
-        self.model.eval()
-        preds: List[str] = []
-        bs = max(1, self.model_spec.batch_size)
-
-        with torch.no_grad():
-            for start in range(0, len(texts), bs):
-                batch_texts = texts[start:start + bs]
-                enc = self.tokenizer(
-                    batch_texts,
-                    truncation=True,
-                    padding=True,
-                    max_length=self.model_spec.max_length,
-                    return_tensors="pt",
-                )
-                enc = {k: v.to(self.device) for k, v in enc.items()}
-                logits = self.model(**enc).logits
-                pred_ids = torch.argmax(logits, dim=-1).cpu().tolist()
-                preds.extend(self.id2label[i] for i in pred_ids)
-        return preds
-
-
-class ChatLLMBackend(ClassifierBackend):
-    """
-    Intentional stub. A future repo file can implement:
-    - OpenAI / Anthropic / Together / vLLM adapters,
-    - prompt templating,
-    - output parsing,
-    - caching and retry logic.
-
-    Keeping this stub here is useful because it defines the interface now.
-    """
-    def fit(self, train_records: List[Example], eval_records: Optional[List[Example]] = None) -> None:
-        return
-
-    def predict(self, texts: List[str]) -> List[str]:
-        raise NotImplementedError(
-            "ChatLLMBackend is a placeholder. Implement in a later repo file, "
-            "but keep the same .predict(List[str]) -> List[str] interface."
-        )
-
-
-# ---------------------------------------------------------------------
-# Benchmark logic
-# ---------------------------------------------------------------------
-
-def build_backend(model_spec: ModelSpec, label_names: Sequence[str], run_dir: Path) -> ClassifierBackend:
-    if model_spec.strategy == "zero_shot_nli":
-        return ZeroShotNLIBackend(model_spec, label_names)
-    if model_spec.strategy in {"finetune_encoder", "finetune_slm"}:
-        return SequenceClassifierBackend(model_spec, label_names, output_subdir=run_dir)
-    if model_spec.strategy == "zero_shot_llm":
-        return ChatLLMBackend(model_spec, label_names)
-    raise ValueError(f"Unknown strategy: {model_spec.strategy}")
-
-
 def evaluate_backend(
     backend: ClassifierBackend,
-    records: List[Example],
+    records: List[dict],
     label_names: Sequence[str],
 ) -> Tuple[Dict[str, float], List[dict]]:
-    texts = [r.text for r in records]
-    true_labels = [r.label for r in records]
+    texts = [r["text"] for r in records]
+    true_labels = [r["label"] for r in records]
     pred_labels = backend.predict(texts)
     metrics = compute_metrics(true_labels, pred_labels, label_names)
     preds = []
@@ -502,7 +227,11 @@ def evaluate_backend(
     return metrics, preds
 
 
-def run_single_experiment(config: BenchmarkConfig, experiment: ExperimentSpec) -> Tuple[List[dict], List[dict]]:
+def run_single_experiment(
+    config: BenchmarkConfig,
+    experiment: ExperimentSpec,
+    cost_config: object,
+) -> Tuple[List[dict], List[dict], dict, List[dict], List[dict]]:
     source_files = config.domains[experiment.source_domain]
     target_files = config.domains[experiment.target_domain]
 
@@ -513,9 +242,25 @@ def run_single_experiment(config: BenchmarkConfig, experiment: ExperimentSpec) -
 
     all_metric_rows: List[dict] = []
     all_prediction_rows: List[dict] = []
+    budget_summary_rows: List[dict] = []
+    cost_rows: List[dict] = []
 
     # Store a reference target score from the strongest zero-shot baseline we have observed so far.
     reference_target_scores: Dict[str, float] = {}
+
+    domain_shift_summary = {
+        "task_name": config.task_name,
+        "source_domain": experiment.source_domain,
+        "target_domain": experiment.target_domain,
+        **compute_domain_shift_summary(
+            [record["text"] for record in source_train],
+            [record["text"] for record in target_train],
+            config.label_names,
+            seed=config.seed,
+            source_labels=[record["label"] for record in source_train],
+            target_labels=[record["label"] for record in target_train],
+        ),
+    }
 
     for model_spec in experiment.models:
         run_name = f"{config.task_name}__{experiment.source_domain}_to_{experiment.target_domain}__{model_spec.name}"
@@ -670,7 +415,8 @@ def run_single_experiment(config: BenchmarkConfig, experiment: ExperimentSpec) -
         # We use the best available zero-shot reference observed so far, if one exists.
         if reference_target_scores:
             reference_name, reference_score = max(reference_target_scores.items(), key=lambda kv: kv[1])
-            n_star = estimate_budget_to_reach_threshold(budget_rows_for_this_model, threshold=reference_score)
+            budget_summary = summarize_budget_to_match(budget_rows_for_this_model, threshold=reference_score)
+            n_star = budget_summary.observed_budget
             all_metric_rows.append({
                 "task_name": config.task_name,
                 "source_domain": experiment.source_domain,
@@ -687,8 +433,35 @@ def run_single_experiment(config: BenchmarkConfig, experiment: ExperimentSpec) -
                 "reference_target_macro_f1": reference_score,
                 "estimated_budget_to_match_reference": n_star,
             })
+            budget_summary_rows.append(
+                {
+                    "task_name": config.task_name,
+                    "source_domain": experiment.source_domain,
+                    "target_domain": experiment.target_domain,
+                    "model_name": model_spec.name,
+                    "model_id": model_spec.model_id,
+                    "strategy": model_spec.strategy,
+                    "reference_model_name": reference_name,
+                    "reference_target_macro_f1": float(reference_score),
+                    "observed_budget_to_match_reference": budget_summary.observed_budget,
+                    "interpolated_budget_to_match_reference": budget_summary.interpolated_budget,
+                    "smoothed_curve_points_json": json.dumps(budget_summary.smoothed_points),
+                }
+            )
+            cost_rows.append(
+                {
+                    "task_name": config.task_name,
+                    "source_domain": experiment.source_domain,
+                    "target_domain": experiment.target_domain,
+                    "model_name": model_spec.name,
+                    "model_id": model_spec.model_id,
+                    "strategy": model_spec.strategy,
+                    "reference_model_name": reference_name,
+                    **estimate_strategy_costs(budget_summary.interpolated_budget, cost_config),
+                }
+            )
 
-    return all_metric_rows, all_prediction_rows
+    return all_metric_rows, all_prediction_rows, domain_shift_summary, budget_summary_rows, cost_rows
 
 
 # ---------------------------------------------------------------------
@@ -702,22 +475,48 @@ def main() -> None:
 
     config = load_config(args.config)
     set_seed(config.seed)
+    with open(args.config, "r", encoding="utf-8") as f:
+        raw_config = json.load(f)
+    cost_config = build_cost_config(raw_config.get("cost_model"))
 
     all_metric_rows: List[dict] = []
     all_prediction_rows: List[dict] = []
+    all_domain_shift_rows: List[dict] = []
+    all_budget_summary_rows: List[dict] = []
+    all_cost_rows: List[dict] = []
 
     for experiment in config.experiments:
-        metric_rows, prediction_rows = run_single_experiment(config, experiment)
+        metric_rows, prediction_rows, domain_shift_summary, budget_summary_rows, cost_rows = run_single_experiment(
+            config,
+            experiment,
+            cost_config,
+        )
         all_metric_rows.extend(metric_rows)
         all_prediction_rows.extend(prediction_rows)
+        all_domain_shift_rows.append(domain_shift_summary)
+        all_budget_summary_rows.extend(budget_summary_rows)
+        all_cost_rows.extend(cost_rows)
 
     output_dir = Path(config.output_dir)
     ensure_dir(output_dir)
     save_rows_to_csv(all_metric_rows, output_dir / "benchmark_metrics.csv")
     save_rows_to_csv(all_prediction_rows, output_dir / "benchmark_predictions.csv")
+    save_rows_to_csv(all_domain_shift_rows, output_dir / "domain_shift_features.csv")
+    save_rows_to_csv(all_budget_summary_rows, output_dir / "budget_summary.csv")
+    save_rows_to_csv(all_cost_rows, output_dir / "cost_analysis.csv")
+    write_json(
+        {
+            "task_name": config.task_name,
+            "experiments": all_domain_shift_rows,
+        },
+        output_dir / "domain_shift_features.json",
+    )
 
     print(f"[done] wrote metrics to: {output_dir / 'benchmark_metrics.csv'}")
     print(f"[done] wrote predictions to: {output_dir / 'benchmark_predictions.csv'}")
+    print(f"[done] wrote domain-shift features to: {output_dir / 'domain_shift_features.csv'}")
+    print(f"[done] wrote budget summaries to: {output_dir / 'budget_summary.csv'}")
+    print(f"[done] wrote cost analysis to: {output_dir / 'cost_analysis.csv'}")
 
 
 if __name__ == "__main__":

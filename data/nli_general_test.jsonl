@@ -1,0 +1,3 @@
+{"text": "Premise: A musician is tuning a guitar. Hypothesis: Someone is preparing to play music.", "label": "entailment"}
+{"text": "Premise: A person is swimming in a pool. Hypothesis: The person is standing on dry land.", "label": "contradiction"}
+{"text": "Premise: Several hikers are walking in the fog. Hypothesis: The weather could be poor.", "label": "neutral"}

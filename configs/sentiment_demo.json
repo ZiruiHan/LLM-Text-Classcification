@@ -1,0 +1,48 @@
+{
+  "task_name": "sentiment_demo",
+  "label_names": ["negative", "positive"],
+  "output_dir": "outputs/sentiment_demo",
+  "seed": 42,
+  "cost_model": {
+    "llm_cost_per_1k_examples": 4.5,
+    "annotation_cost_per_example": 0.3,
+    "finetune_cost_per_run": 15.0,
+    "deployment_examples_per_month": 8000,
+    "deployment_months": 6
+  },
+  "domains": {
+    "reviews": {
+      "train": "data/sentiment_reviews_train.jsonl",
+      "test": "data/sentiment_reviews_test.jsonl"
+    },
+    "finance": {
+      "train": "data/sentiment_finance_train.jsonl",
+      "test": "data/sentiment_finance_test.jsonl"
+    }
+  },
+  "experiments": [
+    {
+      "source_domain": "reviews",
+      "target_domain": "finance",
+      "target_budgets": [2, 4, 6, 8],
+      "models": [
+        {
+          "name": "bart_mnli",
+          "strategy": "zero_shot_nli",
+          "model_id": "facebook/bart-large-mnli",
+          "batch_size": 4,
+          "hypothesis_template": "This text expresses a {} sentiment."
+        },
+        {
+          "name": "distilbert_small",
+          "strategy": "finetune_slm",
+          "model_id": "distilbert-base-uncased",
+          "batch_size": 4,
+          "num_train_epochs": 1,
+          "learning_rate": 3e-5,
+          "max_length": 128
+        }
+      ]
+    }
+  ]
+}

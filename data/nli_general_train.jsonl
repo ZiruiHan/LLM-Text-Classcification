@@ -1,0 +1,9 @@
+{"text": "Premise: A child is playing soccer. Hypothesis: A kid is playing a sport.", "label": "entailment"}
+{"text": "Premise: A chef is cooking dinner. Hypothesis: Nobody is in the kitchen.", "label": "contradiction"}
+{"text": "Premise: People are walking through a city square. Hypothesis: It is a busy afternoon downtown.", "label": "neutral"}
+{"text": "Premise: A woman is reading on a train. Hypothesis: She is holding a book.", "label": "entailment"}
+{"text": "Premise: Two dogs are sleeping by the door. Hypothesis: The animals are running outside.", "label": "contradiction"}
+{"text": "Premise: Students are entering a lecture hall. Hypothesis: A class may be about to start.", "label": "neutral"}
+{"text": "Premise: A man is fixing a bicycle. Hypothesis: He is repairing a bike.", "label": "entailment"}
+{"text": "Premise: A family is eating at a restaurant. Hypothesis: They are alone at home.", "label": "contradiction"}
+{"text": "Premise: Workers are meeting in an office. Hypothesis: They might be planning a project.", "label": "neutral"}

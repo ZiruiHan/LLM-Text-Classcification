@@ -1,0 +1,9 @@
+{"text": "Premise: The patient received insulin before breakfast. Hypothesis: The patient was treated for blood sugar control.", "label": "entailment"}
+{"text": "Premise: The scan showed no evidence of pneumonia. Hypothesis: The scan confirmed a lung infection.", "label": "contradiction"}
+{"text": "Premise: Participants were given a new antiviral in phase two. Hypothesis: The drug may be evaluated for safety and efficacy.", "label": "neutral"}
+{"text": "Premise: The biopsy was consistent with a benign lesion. Hypothesis: The tissue sample was noncancerous.", "label": "entailment"}
+{"text": "Premise: Lab tests found normal kidney function. Hypothesis: The patient had severe renal failure.", "label": "contradiction"}
+{"text": "Premise: Researchers observed reduced inflammation after treatment. Hypothesis: The therapy could affect immune response.", "label": "neutral"}
+{"text": "Premise: The vaccine generated neutralizing antibodies in most volunteers. Hypothesis: The vaccine triggered an immune response.", "label": "entailment"}
+{"text": "Premise: The trial excluded anyone with active infection. Hypothesis: All infected patients were enrolled.", "label": "contradiction"}
+{"text": "Premise: The paper reports a signal in a small retrospective cohort. Hypothesis: Larger studies may still be needed.", "label": "neutral"}
